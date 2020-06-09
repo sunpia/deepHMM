@@ -43,10 +43,20 @@ class DHMM(nn.Module):
             nn.Linear(self.emission_dim, self.emission_dim),
             nn.ReLU(),
             nn.Linear(self.emission_dim, self.input_dim),
+
+            # TODO
+            # maybe we don't need sigmoid
             nn.Sigmoid()
         )
+
+        # transition p(z_t | z_{t-1})
         self.trans = GatedTransition(self.z_dim, self.trans_dim)
+
+        # q(z_t|z_{t-1}, h_{t:T})  
         self.postnet = PostNet(self.z_dim, self.rnn_dim)
+        
+        # embedde, input, hidden, birdirectional, n_layers
+        # encoder observation into hidden state
         self.rnn = Encoder(None, self.input_dim, self.rnn_dim, False, 1)
                    #nn.RNN(input_size=self.input_dim, hidden_size=self.rnn_dim, nonlinearity='relu', \
                    #batch_first=True, bidirectional=False, num_layers=1)                   
@@ -73,17 +83,26 @@ class DHMM(nn.Module):
         T_max = x_lens.max()
         h_0 = self.h_0.expand(1, batch_size, self.rnn.hidden_size).contiguous()
         
+        # rnn_out is the hidden state of observation
         _, rnn_out = self.rnn(x_rev, x_lens, h_0) # push the observed x's through the rnn;
         rnn_out = reverse_sequence(rnn_out, x_lens) # reverse the time-ordering in the hidden state and un-pack it
         rec_losses = torch.zeros((batch_size, T_max), device=x.device) 
         kl_states = torch.zeros((batch_size, T_max), device=x.device)  
         z_prev = self.z_q_0.expand(batch_size, self.z_q_0.size(0)) # set z_prev=z_q_0 to setup the recursive conditioning in q(z_t|...)
         for t in range(T_max):
+            # transfer z_{t-1} to z_t
             z_prior, z_prior_mu, z_prior_logvar = self.trans(z_prev)# p(z_t| z_{t-1})
+
+            # combine hidden state from observation and z_{t-1}
             z_t, z_mu, z_logvar = self.postnet(z_prev, rnn_out[:,t,:]) #q(z_t | z_{t-1}, x_{t:T})
+
+            # TODO really need this ?
             kl = self.kl_div(z_mu, z_logvar, z_prior_mu, z_prior_logvar)
+
             kl_states[:,t] = self.kl_div(z_mu, z_logvar, z_prior_mu, z_prior_logvar)
             logit_x_t = self.emitter(z_t).contiguous() # p(x_t|z_t)         
+
+            # rec_loss is the loss between logit_x_t and x_t
             rec_loss = nn.BCEWithLogitsLoss(reduction='none')(logit_x_t.view(-1), x[:,t,:].contiguous().view(-1)).view(batch_size, -1)
             rec_losses[:,t] = rec_loss.mean(dim=1)                  
             z_prev = z_t   

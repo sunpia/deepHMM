@@ -17,6 +17,14 @@ from helper import SOS_ID, EOS_ID
 class MLP(nn.Module):
     def __init__(self, input_size, arch, output_size, activation=nn.ReLU(), batch_norm=True, init_w=0.02, discriminator=False):
         super(MLP, self).__init__()
+        '''
+        arg:    
+            input:  input_size: 
+                    arch:   
+                    output_size:
+                    batch_norm:
+        '''
+
         self.input_size = input_size
         self.output_size = output_size
         self.init_w= init_w
@@ -65,6 +73,17 @@ class Encoder(nn.Module):
         self.dropout=dropout
         
         self.embedding = embedder # nn.Embedding(vocab_size, emb_size)
+
+        '''
+        nn.GRU: multi-layer gated recurrent unit
+                r_t = sigmod(W_{ir}x_t + b_{ir} + W_{hr}h_{t-1} + b_{hr})
+                z_t = sigmod(W_{in}x_t + b_{in} + r_t * (W_{hn}h_{t-1} + b_{hn}))
+                n_t = tanh(W_{in}x_t + b_{in} + r_t * (W_{hn}h_{t-1} + b_{hn}))
+                h_t = (1 - z_t) * n_t + z_t * h_{t-1}
+
+        '''
+        # TODO change gated recurrent units to LSTM ?
+        # inference network encoder part
         self.rnn = nn.GRU(input_size, hidden_size, n_layers, batch_first=True, bidirectional=bidir)
         self.init_h = nn.Parameter(torch.randn(self.n_layers*(1+self.bidir), 1, self.hidden_size), requires_grad=True)#learnable h0
         self.init_weights()
@@ -75,8 +94,11 @@ class Encoder(nn.Module):
                 weight_init.orthogonal_(w)
                 
     def store_grad_norm(self, grad):
+        # second order and dim 1
         norm = torch.norm(grad, 2, 1)
+        # detach avoid copy of data
         self.grad_norm = norm.detach().data.mean()
+        # return the mean of all element
         return grad
     
     def forward(self, inputs, input_lens=None, init_h=None, noise=False): 
@@ -84,19 +106,31 @@ class Encoder(nn.Module):
         if self.embedding is not None:
             inputs=self.embedding(inputs)  # input: [batch_sz x seq_len] -> [batch_sz x seq_len x emb_sz]
         
+        '''
+            The batch size is a hyperparameter of gradient descent that controls the number of 
+            training samples to work through before the model’s internal parameters are updated.
+
+            The number of epochs is a hyperparameter of gradient descent that controls the number 
+            of complete passes through the training dataset.
+        '''
         batch_size, seq_len, emb_size=inputs.size()
+        # torch.nn.functional.dropout(input, p=0.5, training=True, inplace=False)
         inputs=F.dropout(inputs, self.dropout, self.training)# dropout
         
+        # input_lens is the length of trajectory
         if input_lens is not None:# sort and pack sequence 
             input_lens_sorted, indices = input_lens.sort(descending=True)
             inputs_sorted = inputs.index_select(0, indices)        
+            # packs a tensor containing padded sequences of variable length
             inputs = pack_padded_sequence(inputs_sorted, input_lens_sorted.data.tolist(), batch_first=True)
         
+
         if init_h is None:
             init_h = self.init_h.expand(-1,batch_size,-1).contiguous()# use learnable initial states, expanding along batches
         #self.rnn.flatten_parameters() # time consuming!!
         hids, h_n = self.rnn(inputs, init_h) # hids: [b x seq x (n_dir*hid_sz)]  
                                                   # h_n: [(n_layers*n_dir) x batch_sz x hid_sz] (2=fw&bw)
+        # TODO not fully understand
         if input_lens is not None: # reorder and pad
             _, inv_indices = indices.sort()
             hids, lens = pad_packed_sequence(hids, batch_first=True)     
@@ -104,6 +138,8 @@ class Encoder(nn.Module):
             h_n = h_n.index_select(1, inv_indices)
         h_n = h_n.view(self.n_layers, (1+self.bidir), batch_size, self.hidden_size) #[n_layers x n_dirs x batch_sz x hid_sz]
         h_n = h_n[-1] # get the last layer [n_dirs x batch_sz x hid_sz]
+
+        # view is similar to pointer, avoid memory copy
         enc = h_n.transpose(0,1).contiguous().view(batch_size,-1) #[batch_sz x (n_dirs*hid_sz)]
         #if enc.requires_grad:
         #    enc.register_hook(self.store_grad_norm) # store grad norm 
@@ -127,6 +163,8 @@ class GatedTransition(nn.Module):
             nn.Linear(z_dim, trans_dim),
             nn.ReLU(),
             nn.Linear(trans_dim, z_dim),
+            # TODO 
+            # remove sigmoid
             nn.Sigmoid()
         )
         self.proposed_mean = nn.Sequential(
@@ -146,11 +184,25 @@ class GatedTransition(nn.Module):
         Given the latent `z_{t-1}` corresponding to the time step t-1
         we return the mean and scale vectors that parameterize the (diagonal) gaussian distribution `p(z_t | z_{t-1})`
         """        
+
+        # z -> trans -> ReLU -> z 
+        # g_t = MLP(z_{t-1}, ReLU, Sigmod)
         gate = self.gate(z_t_1) # compute the gating function
+
+        # z -> trans -> ReLU -> z 
+        # g_t = MLP(z_{t-1}, ReLU)
         proposed_mean = self.proposed_mean(z_t_1) # compute the 'proposed mean'
+
+        # linear interplation of linear and non-linear components
         mu = (1 - gate) * self.z_to_mu(z_t_1) + gate * proposed_mean # compute the scale used to sample z_t, using the proposed mean from
+
+        # z -> logvar
         logvar = self.z_to_logvar(self.relu(proposed_mean)) 
+
+        # check the device of z_t_1, cpu or cuda
         epsilon = torch.randn(z_t_1.size(), device=z_t_1.device) # sampling z by re-parameterization
+
+        # stochastic data
         z_t = mu + epsilon * torch.exp(0.5 * logvar)    # [batch_sz x z_sz]
         return z_t, mu, logvar 
 
@@ -175,6 +227,7 @@ class PostNet(nn.Module):
         state of the RNN `h(x_{t:T})` we return the mean and scale vectors that
         parameterize the (diagonal) gaussian distribution `q(z_t|z_{t-1}, x_{t:T})`
         """
+        # backwark rnn
         h_combined = 0.5*(self.z_to_h(z_t_1) + h_x)# combine the rnn hidden state with a transformed version of z_t_1
         mu = self.h_to_mu(h_combined)
         logvar = self.h_to_logvar(h_combined)
@@ -182,4 +235,4 @@ class PostNet(nn.Module):
         epsilon = torch.randn(z_t_1.size(), device=z_t_1.device) # sampling z by re-parameterization
         z_t = epsilon * std + mu   # [batch_sz x z_sz]
         return z_t, mu, logvar 
-    
+ 
