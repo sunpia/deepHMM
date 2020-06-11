@@ -2,18 +2,18 @@ def config_DHMM():
     conf = {
 
 # Model Arguments
-    'input_dim': 88,
-    'z_dim':100,
-    'emission_dim':100,
-    'trans_dim':200,
-    'rnn_dim':600,
+    'input_dim': 2,
+    'z_dim':16,
+    'emission_dim':16,
+    'trans_dim':20,
+    'rnn_dim':30,
 
     'temp':1.0, # softmax temperature (lower --> more discrete)
     'dropout':0.5, # dropout applied to layers (0 = no dropout)
 
 # Training Arguments
     'batch_size':20,
-    'epochs':5000, # maximum number of epochs
+    'epochs':1000, # maximum number of epochs
     'min_epochs':2, # minimum number of epochs to train for
 
     'lr':3e-4, # autoencoder learning rate

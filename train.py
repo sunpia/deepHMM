@@ -23,6 +23,7 @@ import torch.nn.functional as F
 from torch.optim import Adam
 
 from data_loader import PolyphonicDataset
+from data_loader import HumanMotionDataset
 import models, configs
 from helper import get_logger, gVar
 from tensorboardX import SummaryWriter # install tensorboardX (pip install tensorboardX) before importing this package
@@ -55,10 +56,14 @@ def main(args):
     model = model.cuda()
     if args.reload_from>=0:
         load_model(model, args.reload_from)
-        
-    train_set=PolyphonicDataset(args.data_path+'train.pkl')
-    valid_set=PolyphonicDataset(args.data_path+'valid.pkl')
-    test_set=PolyphonicDataset(args.data_path+'test.pkl')
+    if args.data_path == './data/human_motion/':
+    	train_set=HumanMotionDataset(args.data_path+'train.pkl')
+    	valid_set=HumanMotionDataset(args.data_path+'valid.pkl')
+    	test_set=HumanMotionDataset(args.data_path+'test.pkl')
+    else:
+    	train_set=PolyphonicDataset(args.data_path+'train.pkl')
+    	valid_set=PolyphonicDataset(args.data_path+'valid.pkl')
+    	test_set=PolyphonicDataset(args.data_path+'test.pkl')
 
     #################
     # TRAINING LOOP #
@@ -108,12 +113,13 @@ def main(args):
                 x, x_rev, x_lens = gVar(x), gVar(x_rev), gVar(x_lens)
                 test_nll = model.valid(x, x_rev, x_lens) / x_lens.sum()
             log("[val/test epoch %08d]  %.8f" % (epoch, test_nll))
+            print("val/test epoch: ", epoch, " test_nll: ",test_nll)
 
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="parse args")
-    parser.add_argument('--data-path', type=str, default='./data/polyphonic/')
+    parser.add_argument('--data-path', type=str, default='./data/human_motion/')
     parser.add_argument('--model', type=str, default='DHMM', help='model name')
     parser.add_argument('--dataset', type=str, default='JSBChorales', help='name of dataset. SWDA or DailyDial')
     parser.add_argument('--expname', type=str, default='basic',
