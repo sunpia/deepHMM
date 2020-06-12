@@ -143,5 +143,7 @@ class DHMM(nn.Module):
             p_x_t = F.sigmoid(self.emitter(z_t))  # compute the probabilities that parameterize the bernoulli likelihood              
             x_t = torch.bernoulli(p_x_t) #sample observe x_t according to the bernoulli distribution p(x_t|z_t)
             z_prev = z_t
+         
+
 
 

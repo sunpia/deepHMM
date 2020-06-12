@@ -53,7 +53,7 @@ def main(args):
     
     # instantiate the dmm
     model = getattr(models, args.model)(config)
-    model = model.cuda()
+    #model = model.cuda()
     if args.reload_from>=0:
         load_model(model, args.reload_from)
     if args.data_path == './data/human_motion/':
